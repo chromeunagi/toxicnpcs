@@ -67,6 +67,7 @@ class BaseClientImpl(BaseClient):
             # According to documentation, response.text might not exist if the prompt is blocked
             # or if the response is empty.
             # gemini-1.5-flash uses generate_content, not client.models.generate_content
+            print(prompt)
             response = self.client.generate_content(contents=prompt)
 
             # Check for empty parts or finish reason

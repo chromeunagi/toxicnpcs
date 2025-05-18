@@ -23,13 +23,23 @@ def get_tool(tool_name: str) -> Type[Tool]:
 # ---------------------------------------------------------------------
 # Import tool modules AFTER helpers are defined to avoid circular import
 # ---------------------------------------------------------------------
-from . import dialogue_tools  # noqa: E402  # pylint: disable=wrong-import-position
-from . import combat_tools  # noqa: E402  # pylint: disable=wrong-import-position
-from . import movement_tools  # noqa: E402  # pylint: disable=wrong-import-position
-from . import social_tools  # noqa: E402  # pylint: disable=wrong-import-position
-from . import emotional_tools  # noqa: E402  # pylint: disable=wrong-import-position
-from . import item_tools  # noqa: E402  # pylint: disable=wrong-import-position
-from . import environmental_tools  # noqa: E402  # pylint: disable=wrong-import-position
+from . import dialogue_tools  # noqa: E402, F401  # pylint: disable=wrong-import-position,unused-import
+from . import combat_tools  # noqa: E402, F401  # pylint: disable=wrong-import-position,unused-import
+from . import movement_tools  # noqa: E402, F401  # pylint: disable=wrong-import-position,unused-import
+from . import social_tools  # noqa: E402, F401  # pylint: disable=wrong-import-position,unused-import
+from . import emotional_tools  # noqa: E402, F401  # pylint: disable=wrong-import-position,unused-import
+from . import item_tools  # noqa: E402, F401  # pylint: disable=wrong-import-position,unused-import
+from . import environmental_tools  # noqa: E402, F401  # pylint: disable=wrong-import-position,unused-import
+
+# New "normal people" tool categories
+from . import communication_tools # noqa: E402, F401
+from . import observation_tools # noqa: E402, F401
+from . import self_care_tools # noqa: E402, F401
+from . import everyday_object_tools # noqa: E402, F401
+from . import social_maneuvering_tools # noqa: E402, F401
+from . import cognitive_tools # noqa: E402, F401
+from . import subtle_expression_tools # noqa: E402, F401
+
 
 __all__ = [
     "Tool",
