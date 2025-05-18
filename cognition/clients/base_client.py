@@ -1,11 +1,44 @@
 from typing import Optional
 import google.generativeai as genai
+from abc import ABC, abstractmethod
 
 API_KEY = "AIzaSyCVInLlj_-yiQRPdfhJuJyD1JDhqqmKqCo"  # TODO: Consider moving to a secure config
 DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"  # Updated to a more current model
 
 
-class BaseClient:
+class BaseClient(ABC):
+    """
+    Abstract base class for LLM clients.
+    """
+
+    @abstractmethod
+    def generate_content(self, prompt: str) -> str:
+        """
+        Generate text content based on the given prompt.
+        
+        Args:
+            prompt: The prompt to send to the LLM.
+            
+        Returns:
+            The generated content as a string.
+        """
+        pass
+    
+    @abstractmethod
+    def close(self) -> None:
+        """Close any resources used by the client."""
+        pass
+    
+    def __enter__(self):
+        """Enter the runtime context related to this object."""
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit the runtime context and close the client."""
+        self.close()
+
+
+class BaseClientImpl(BaseClient):
     """
     A base client for interacting with the Gemini API.
     """
@@ -52,20 +85,15 @@ class BaseClient:
             print(f"Error generating content with Gemini: {e}")
             return None
 
-    def __enter__(self):
-        """Enter the runtime context related to this object."""
-        # No specific resource acquisition needed beyond __init__
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Exit the runtime context related to this object."""
+    def close(self) -> None:
+        """Close any resources used by the client."""
         # No specific resource release needed for this client
         pass
 
 
 if __name__ == "__main__":
     # Example usage (optional, for testing)
-    with BaseClient() as test_client:
+    with BaseClientImpl() as test_client:
         test_prompt = "Translate 'hello world' into French."
         response_text = test_client.generate_content(test_prompt)
         if response_text:

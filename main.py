@@ -1,3 +1,4 @@
+import sys
 from cognition.clients.stimulus_client import StimulusClient
 from cognition.clients.base_client import BaseClient
 from cognition.clients.decision_client import DecisionClient
@@ -11,6 +12,8 @@ from cognition.StimulusEngine.types import (
     TraumaTag,
 )
 
+from cognition.DecisionEngine.main import decision_engine_demo
+
 if __name__ == "__main__":
     # Now we can use StimulusClient as a context manager
     # BaseClient() is instantiated here and passed to StimulusClient.
@@ -22,6 +25,8 @@ if __name__ == "__main__":
     # But since StimulusClient now handles its context, and BaseClient's context methods are simple,
     # this direct approach should work for the user's desired syntax.
 
+    decision_engine_demo()
+    sys.exit()
     with StimulusClient(
         base_client=BaseClient()
     ) as client:  # Use 'client' as the variable name for StimulusClient instance

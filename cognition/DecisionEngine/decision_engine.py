@@ -19,6 +19,9 @@ from cognition.PersonalityEngine.personality import (
     PersonalityFactory,
 )
 
+# Import DecisionClient for LLM-based decisions
+from cognition.clients.decision_client import DecisionClient
+
 
 class ToolCategory:
     """Categories of tools for decision making."""
@@ -36,7 +39,8 @@ class DecisionEngine:
 
     def __init__(self, 
                 use_llm: bool = False, 
-                personality: Optional[Personality] = None) -> None:
+                personality: Optional[Personality] = None,
+                decision_client: Optional[DecisionClient] = None) -> None:
         """
         Initialize the decision engine with optional personality.
         
@@ -44,9 +48,11 @@ class DecisionEngine:
             use_llm: Whether to use LLM for decision making
             personality: Optional personality to influence decisions. If None, 
                          a random personality will be created.
+            decision_client: Optional client for LLM-based decisions
         """
         self.use_llm = use_llm
         self.personality = personality or PersonalityFactory.create_random_personality("Default NPC")
+        self.decision_client = decision_client
         
         # Set mood context - this can change over time as the NPC experiences events
         self.personality.update_modifier(PersonalityModifier.MOOD, 0.5)  # neutral mood
@@ -65,7 +71,7 @@ class DecisionEngine:
         """High-level API: choose a tool and execute it, returning the action."""
         # Update modifiers based on stimulus
         self._update_modifiers(stimulus)
-        
+
         tool_cls = self._select_tool(stimulus)
         tool_instance: Tool = tool_cls()
         kwargs: Dict[str, Any] = self._build_tool_kwargs(tool_instance, stimulus)
@@ -135,13 +141,17 @@ class DecisionEngine:
     def _select_tool(self, stimulus: InterpretedStimulus) -> Type[Tool]:
         """Return the Tool class to handle the stimulus.
 
-        If self.use_llm is True, we would construct a prompt and query an LLM.
-        For now, we employ personality-influenced heuristics with weighted random choices.
+        If self.use_llm is True, we will use the DecisionClient to query an LLM.
+        Otherwise, we employ personality-influenced heuristics with weighted random choices.
         """
         if self.use_llm:
-            # Placeholder for future LLM selection logic
-            tool_name = self._mock_llm_select(stimulus)
-            return get_tool(tool_name)
+            # Use DecisionClient if available, otherwise fall back to mock
+            if self.decision_client:
+                return self._llm_select_tool(stimulus)
+            else:
+                # Placeholder for mock LLM selection logic
+                tool_name = self._mock_llm_select(stimulus)
+                return get_tool(tool_name)
 
         # Get personality-influenced probabilities for each tool
         tool_probabilities = self._calculate_tool_probabilities(stimulus)
@@ -155,7 +165,168 @@ class DecisionEngine:
         selected_tool = random.choices(tools, weights=weights, k=1)[0]
         
         return get_tool(selected_tool)
-
+    
+    def _llm_select_tool(self, stimulus: InterpretedStimulus) -> Type[Tool]:
+        """
+        Use the DecisionClient to query an LLM for tool selection.
+        """
+        # Create a context dict with personality information for the LLM
+        context = self._create_personality_context()
+        
+        # Add available tools information
+        context["available_actions"] = self._get_available_tools_info()
+        
+        try:
+            # Query the LLM via DecisionClient
+            decision = self.decision_client.decide_action(
+                interpreted_stimulus=stimulus,
+                context=context
+            )
+            
+            # Convert the LLM decision to a Tool class
+            return self._decision_to_tool(decision)
+        except Exception as e:
+            print(f"Error using DecisionClient: {e}")
+            print("Falling back to heuristic tool selection")
+            # Fall back to the probability-based selection
+            tool_probabilities = self._calculate_tool_probabilities(stimulus)
+            tools, weights = zip(*tool_probabilities.items())
+            selected_tool = random.choices(tools, weights=weights, k=1)[0]
+            return get_tool(selected_tool)
+    
+    def _create_personality_context(self) -> Dict[str, Any]:
+        """Create a context dictionary with personality information for the LLM."""
+        # Extract top traits (those with values > 0.6)
+        top_traits = {}
+        for trait, value in sorted(
+            self.personality.traits.items(),
+            key=lambda x: x[1],
+            reverse=True
+        ):
+            if value > 0.6:
+                top_traits[trait.name] = value
+        
+        # Get current mood and stress
+        mood = self.personality.get_modifier(PersonalityModifier.MOOD)
+        stress = self.personality.get_modifier(PersonalityModifier.STRESS)
+        
+        # Create mood description
+        mood_desc = "neutral"
+        if mood > 0.7:
+            mood_desc = "positive"
+        elif mood < 0.3:
+            mood_desc = "negative"
+            
+        # Create stress description
+        stress_desc = "calm"
+        if stress > 0.7:
+            stress_desc = "highly stressed"
+        elif stress > 0.4:
+            stress_desc = "somewhat tense"
+            
+        # Create personality summary
+        traits_summary = ", ".join([f"high {name.lower()}" for name in top_traits])
+        if not traits_summary:
+            traits_summary = "balanced traits"
+        
+        quirks_summary = ""
+        if self.personality.quirks:
+            quirks_summary = f" with quirks: {', '.join(self.personality.quirks)}"
+        
+        personality_summary = f"A character with {traits_summary}, currently {mood_desc} and {stress_desc}{quirks_summary}."
+        
+        return {
+            "npc_personality_summary": personality_summary,
+            "npc_current_mood": mood_desc,
+            "npc_current_stress": stress_desc,
+            "npc_traits": {t.name: v for t, v in self.personality.traits.items()},
+            "npc_quirks": self.personality.quirks
+        }
+    
+    def _get_available_tools_info(self) -> List[Dict[str, str]]:
+        """Get information about available tools for the LLM."""
+        tool_info = []
+        
+        for tool_name, tool_class in _TOOL_REGISTRY.items():
+            tool_info.append({
+                "name": tool_class.name,
+                "description": tool_class.description
+            })
+            
+        return tool_info
+    
+    def _decision_to_tool(self, decision: Dict[str, Any]) -> Type[Tool]:
+        """Convert a decision from the LLM to a Tool class."""
+        # Get the action name from the decision
+        action = decision.get("action", "dialogue_response")
+        
+        # Map the action to a tool
+        tool_name = self._map_action_to_tool(action)
+        
+        try:
+            # Try to get the tool class
+            return get_tool(tool_name)
+        except KeyError:
+            # If the tool doesn't exist, fallback to DialogueResponseTool
+            print(f"Warning: Tool '{tool_name}' not found, falling back to DialogueResponseTool")
+            return get_tool("DialogueResponseTool")
+    
+    def _map_action_to_tool(self, action: str) -> str:
+        """Map an action name from the LLM to a tool class name."""
+        # Direct mappings
+        action_to_tool = {
+            "attack": "AttackTool",
+            "defend": "DefendTool",
+            "threaten": "ThreatenTool",
+            "disarm": "DisarmTool",
+            "stun": "StunTool",
+            "flee": "FleeTool",
+            "retreat": "RetreatTool",
+            "hide": "HideTool",
+            "approach": "ApproachTool",
+            "circle": "CircleTool",
+            "take_cover": "TakeCoverTool",
+            "greet": "GreetTool",
+            "apologize": "ApologizeTool",
+            "offer_help": "OfferHelpTool",
+            "befriend": "BefriendTool",
+            "bargain": "BargainTool",
+            "request_info": "RequestInfoTool",
+            "express_emotion": "ExpressEmotionTool",
+            "laugh": "LaughTool",
+            "cry": "CryTool",
+            "panic": "PanicTool",
+            "show_confusion": "ShowConfusionTool",
+            "use_item": "UseItemTool",
+            "give_item": "GiveItemTool",
+            "take_item": "TakeItemTool",
+            "examine_item": "ExamineItemTool",
+            "equip_item": "EquipItemTool",
+            "craft_item": "CraftItemTool",
+            "search_area": "SearchAreaTool",
+            "listen": "ListenTool",
+            "set_trap": "SetTrapTool",
+            "create_distraction": "CreateDistraction",
+            "interact_environment": "InteractEnvironmentTool",
+        }
+        
+        # Generic mappings for common categories
+        if action.startswith("say_") or action.startswith("speak_") or action == "speak" or action == "say":
+            return "DialogueResponseTool"
+        
+        if action.startswith("ask_"):
+            return "AskQuestionTool"
+            
+        if action.startswith("monologue_") or action == "monologue":
+            return "MonologueTool"
+            
+        # Use direct mapping if available
+        if action in action_to_tool:
+            return action_to_tool[action]
+            
+        # Fallback to dialogue response for any other actions
+        return "DialogueResponseTool"
+    
     def _calculate_tool_probabilities(self, 
                                      stimulus: InterpretedStimulus) -> Dict[str, float]:
         """
@@ -411,7 +582,7 @@ class DecisionEngine:
                 ["GreetTool", "LaughTool", "OfferHelpTool"],
                 0.1
             )
-    
+
     def _build_tool_kwargs(self, tool: Tool, stimulus: InterpretedStimulus) -> Dict[str, Any]:
         """Map stimulus to tool‐specific kwargs."""
         kwargs: Dict[str, Any] = {}

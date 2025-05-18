@@ -4,6 +4,8 @@ import time
 import sys
 import os
 
+from cognition.clients.decision_client import DecisionClient
+
 # Add parent directory to path so imports work properly
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -77,7 +79,7 @@ def generate_example_stimuli() -> list[InterpretedStimulus]:
     ]
 
 
-def main() -> None:
+def decision_engine_demo() -> None:
     print("\n=== PERSONALITY-DRIVEN DECISION ENGINE DEMO ===\n")
     
     # Create different personality types
@@ -88,10 +90,10 @@ def main() -> None:
     
     # Create engines with different personalities
     engines = {
-        "Aggressive NPC": DecisionEngine(personality=aggressive_personality),
-        "Cautious NPC": DecisionEngine(personality=cautious_personality),
-        "Friendly NPC": DecisionEngine(personality=friendly_personality),
-        "Random NPC": DecisionEngine(personality=random_personality),
+        "Aggressive NPC": DecisionEngine(personality=aggressive_personality, use_llm=True, decision_client=DecisionClient()),
+        "Cautious NPC": DecisionEngine(personality=cautious_personality, use_llm=True, decision_client=DecisionClient()),
+        "Friendly NPC": DecisionEngine(personality=friendly_personality, use_llm=True, decision_client=DecisionClient()),
+        "Random NPC": DecisionEngine(personality=random_personality, use_llm=True, decision_client=DecisionClient()),
     }
     
     # Run each stimulus through each personality type
@@ -133,4 +135,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main() 
+    decision_engine_demo()  

@@ -1,7 +1,7 @@
 import json
 from typing import Any, Dict, Optional, Type
 
-from .base_client import BaseClient
+from .base_client import BaseClientImpl
 from cognition.StimulusEngine.types import InterpretedStimulus
 
 # Potentially import types from DecisionEngine or PersonalityEngine as needed in the future
@@ -15,7 +15,8 @@ class DecisionClient:
     using a BaseClient.
     """
 
-    def __init__(self, base_client: BaseClient):
+    def __init__(self):
+        base_client = BaseClientImpl()
         self.base_client = base_client
 
     def decide_action(
