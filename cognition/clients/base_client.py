@@ -1,9 +1,10 @@
+import os
 from typing import Optional
 import google.generativeai as genai
 from abc import ABC, abstractmethod
 
-API_KEY = "AIzaSyCVInLlj_-yiQRPdfhJuJyD1JDhqqmKqCo"  # TODO: Consider moving to a secure config
-DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"  # Updated to a more current model
+API_KEY = os.getenv("GEMINI_API_KEY")  # TODO: Consider moving to a secure config
+DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"  # Updated to a more current model
 
 
 class BaseClient(ABC):

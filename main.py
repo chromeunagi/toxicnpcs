@@ -1,4 +1,10 @@
+import os
 import sys
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 from cognition.clients.stimulus_client import StimulusClient
 from cognition.clients.base_client import BaseClient
 from cognition.clients.decision_client import DecisionClient
