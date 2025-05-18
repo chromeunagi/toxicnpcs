@@ -1,5 +1,5 @@
 from collections import deque
-from typing import List, Deque, Optional
+from typing import List, Deque, Optional, Sequence
 
 from cognition.StimulusEngine.types import (
     RawStimulus,
@@ -18,18 +18,18 @@ class Actor:
     def __init__(
         self,
         actor_id: str,
-        interpretation_modifiers: List[InterpretationModifier],
+        interpretation_modifiers: Sequence[InterpretationModifier],
     ):
         """
         Initializes an Actor instance.
 
         Args:
             actor_id: A unique identifier for the actor.
-            interpretation_modifiers: A list of InterpretationModifier objects
+            interpretation_modifiers: A sequence of InterpretationModifier objects
                                       that define how the actor processes stimuli.
         """
         self.actor_id: str = actor_id
-        self.interpretation_modifiers: List[InterpretationModifier] = (
+        self.interpretation_modifiers: List[InterpretationModifier] = list(
             interpretation_modifiers
         )
 
@@ -58,7 +58,7 @@ class Actor:
         """Adds an interpreted stimulus to the history."""
         self.interpreted_stimuli_history.append(stimulus)
 
-    def add_to_memory(self, item: InterpretedStimulus | str):
+    def add_to_memory(self, item: str):
         """
         Creates a MemoryItem from an InterpretedStimulus or string and adds it to
         the list of memorized items.

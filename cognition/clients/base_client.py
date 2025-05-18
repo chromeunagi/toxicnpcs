@@ -16,24 +16,24 @@ class BaseClient(ABC):
     def generate_content(self, prompt: str) -> str:
         """
         Generate text content based on the given prompt.
-        
+
         Args:
             prompt: The prompt to send to the LLM.
-            
+
         Returns:
             The generated content as a string.
         """
         pass
-    
+
     @abstractmethod
     def close(self) -> None:
         """Close any resources used by the client."""
         pass
-    
+
     def __enter__(self):
         """Enter the runtime context related to this object."""
         return self
-        
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Exit the runtime context and close the client."""
         self.close()
