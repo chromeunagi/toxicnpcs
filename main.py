@@ -1,5 +1,5 @@
 from cognition.clients.direct_gemini_interpreter import interpret_stimulus
-from cognition.StimulusProcessEngine.types import (
+from cognition.StimulusEngine.types import (
     RawStimulus,
     RawStimulusChannel,
     PersonalityInterpretationModifier,
