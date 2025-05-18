@@ -1,21 +1,34 @@
 from __future__ import annotations
 
 import random
-from typing import Any, Dict, Type, Optional, List, Tuple
+from typing import Any, Dict, Type, Optional, List, Tuple, Set
 
 from cognition.DecisionEngine.stimulus import (
     InterpretedStimulus,
     StimulusIntent,
     StimulusSchema,
     StimulusType,
+    SalienceType,
 )
-from cognition.DecisionEngine.toolbox import get_tool, Tool
+from cognition.DecisionEngine.toolbox import get_tool, Tool, _TOOL_REGISTRY
 
 from cognition.PersonalityEngine.personality import (
     Personality,
     PersonalityDimension,
+    PersonalityModifier,
     PersonalityFactory,
 )
+
+
+class ToolCategory:
+    """Categories of tools for decision making."""
+    DIALOGUE = "dialogue_tools"
+    COMBAT = "combat_tools"
+    MOVEMENT = "movement_tools"
+    SOCIAL = "social_tools"
+    EMOTIONAL = "emotional_tools"
+    ITEM = "item_tools"
+    ENVIRONMENTAL = "environmental_tools"
 
 
 class DecisionEngine:
@@ -35,15 +48,24 @@ class DecisionEngine:
         self.use_llm = use_llm
         self.personality = personality or PersonalityFactory.create_random_personality("Default NPC")
         
+        # Set mood context - this can change over time as the NPC experiences events
+        self.personality.update_modifier(PersonalityModifier.MOOD, 0.5)  # neutral mood
+        self.personality.update_modifier(PersonalityModifier.STRESS, 0.2)  # low initial stress
+        
         # Track decision history for potential pattern analysis
         self.decision_history: List[Tuple[InterpretedStimulus, str]] = []
+        
+        # Cache of available tools organized by category
+        self._tools_by_category = self._organize_tools_by_category()
 
     # ------------------------------------------------------------------
     # PUBLIC INTERFACE
     # ------------------------------------------------------------------
     def decide_and_act(self, stimulus: InterpretedStimulus) -> str:
         """High-level API: choose a tool and execute it, returning the action."""
-
+        # Update modifiers based on stimulus
+        self._update_modifiers(stimulus)
+        
         tool_cls = self._select_tool(stimulus)
         tool_instance: Tool = tool_cls()
         kwargs: Dict[str, Any] = self._build_tool_kwargs(tool_instance, stimulus)
@@ -57,31 +79,72 @@ class DecisionEngine:
     # ------------------------------------------------------------------
     # INTERNALS
     # ------------------------------------------------------------------
+    def _organize_tools_by_category(self) -> Dict[str, Dict[str, Type[Tool]]]:
+        """Organize available tools by their module/category."""
+        result = {}
+        
+        for tool_name, tool_class in _TOOL_REGISTRY.items():
+            module_name = tool_class.__module__.split('.')[-1]
+            if module_name not in result:
+                result[module_name] = {}
+            result[module_name][tool_name] = tool_class
+            
+        return result
+    
+    def _update_modifiers(self, stimulus: InterpretedStimulus) -> None:
+        """Update personality modifiers based on the stimulus properties."""
+        # Adjust stress level based on threat and emotional salience
+        if StimulusSchema.THREAT in stimulus.schema:
+            current_stress = self.personality.get_modifier(PersonalityModifier.STRESS)
+            emotional_impact = stimulus.salience.get(SalienceType.EMOTIONAL, 0.5)
+            # Increase stress more for high emotional impact threats
+            stress_increase = 0.2 * emotional_impact
+            self.personality.update_modifier(
+                PersonalityModifier.STRESS, 
+                min(1.0, current_stress + stress_increase)
+            )
+        
+        # Adjust mood based on stimulus intent and schema
+        current_mood = self.personality.get_modifier(PersonalityModifier.MOOD)
+        mood_change = 0.0
+        
+        # Negative intents decrease mood
+        if stimulus.intent in [StimulusIntent.HUMILIATE, StimulusIntent.PROVOKE]:
+            mood_change -= 0.1
+        
+        # Positive intents increase mood
+        if stimulus.intent in [StimulusIntent.BUILD_RAPPORT, StimulusIntent.EXPRESS_LOVE]:
+            mood_change += 0.1
+        
+        # Negative schemas decrease mood
+        if any(schema in stimulus.schema for schema in 
+              [StimulusSchema.THREAT, StimulusSchema.INSULT, StimulusSchema.VIOLENCE]):
+            mood_change -= 0.1
+        
+        # Positive schemas increase mood
+        if any(schema in stimulus.schema for schema in 
+              [StimulusSchema.PRAISE, StimulusSchema.REASSURANCE, StimulusSchema.COMPASSION]):
+            mood_change += 0.1
+            
+        # Apply mood change, keeping within bounds
+        self.personality.update_modifier(
+            PersonalityModifier.MOOD,
+            max(0.0, min(1.0, current_mood + mood_change))
+        )
+
     def _select_tool(self, stimulus: InterpretedStimulus) -> Type[Tool]:
         """Return the Tool class to handle the stimulus.
 
         If self.use_llm is True, we would construct a prompt and query an LLM.
         For now, we employ personality-influenced heuristics with weighted random choices.
         """
-
         if self.use_llm:
             # Placeholder for future LLM selection logic
             tool_name = self._mock_llm_select(stimulus)
             return get_tool(tool_name)
 
-        # Discover available tools
-        available_tools: Dict[str, Type[Tool]] = {}
-        try:
-            available_tools["FleeTool"] = get_tool("FleeTool")
-        except KeyError:
-            pass  # Tool not available
-        try:
-            available_tools["DialogueResponseTool"] = get_tool("DialogueResponseTool")
-        except KeyError:
-            pass  # Tool not available
-            
         # Get personality-influenced probabilities for each tool
-        tool_probabilities = self._calculate_tool_probabilities(stimulus, available_tools)
+        tool_probabilities = self._calculate_tool_probabilities(stimulus)
         
         # If no tools match or are available, raise an error
         if not tool_probabilities:
@@ -94,96 +157,48 @@ class DecisionEngine:
         return get_tool(selected_tool)
 
     def _calculate_tool_probabilities(self, 
-                                     stimulus: InterpretedStimulus, 
-                                     available_tools: Dict[str, Type[Tool]]) -> Dict[str, float]:
+                                     stimulus: InterpretedStimulus) -> Dict[str, float]:
         """
         Calculate probability weights for each available tool based on:
         1. The stimulus properties
-        2. Personality traits
+        2. Personality traits and modifiers
         3. Base heuristic rules
         4. A touch of randomness for non-determinism
         
         Returns a dict mapping tool names to their probability weights.
         """
+        # First determine which tool categories to consider for this stimulus
+        category_probabilities = self._calculate_category_probabilities(stimulus)
+        
+        # Initialize with all tools having zero probability
         probabilities: Dict[str, float] = {}
         
-        # Initialize with base probabilities
-        if "DialogueResponseTool" in available_tools:
-            probabilities["DialogueResponseTool"] = 0.5
-        if "FleeTool" in available_tools:
-            probabilities["FleeTool"] = 0.5
-        
-        # Apply basic heuristic adjustments
-        if StimulusSchema.THREAT in stimulus.schema:
-            # Threats tend to increase flee probability
-            if "FleeTool" in probabilities:
-                probabilities["FleeTool"] = 0.7
-            if "DialogueResponseTool" in probabilities:
-                probabilities["DialogueResponseTool"] = 0.3
+        # Set base probabilities for tools in relevant categories
+        for category, category_prob in category_probabilities.items():
+            if category in self._tools_by_category:
+                tools_in_category = self._tools_by_category[category]
                 
-        if stimulus.stimulus_type == StimulusType.DIALOGUE:
-            # Dialogue tends to increase dialogue response probability
-            if "DialogueResponseTool" in probabilities:
-                probabilities["DialogueResponseTool"] = 0.7
-            if "FleeTool" in probabilities:
-                probabilities["FleeTool"] = 0.3
+                # Distribute the category probability among tools in this category
+                tool_base_prob = category_prob / len(tools_in_category) if tools_in_category else 0
+                
+                for tool_name in tools_in_category:
+                    probabilities[tool_name] = tool_base_prob
         
-        # Apply personality trait influences
-        if "FleeTool" in probabilities:
-            # Higher aggressiveness means less likely to flee
-            flee_prob = probabilities["FleeTool"]
-            flee_prob = self.personality.influence_value(
-                flee_prob,
-                PersonalityDimension.AGGRESSIVENESS,
-                influence_strength=-0.4  # Negative because aggressiveness reduces flee tendency
-            )
-            # Risk tolerance also affects flee probability (higher risk tolerance = lower flee)
-            flee_prob = self.personality.influence_value(
-                flee_prob,
-                PersonalityDimension.RISK_TOLERANCE,
-                influence_strength=-0.3
-            )
-            # Apply the adjustment
-            probabilities["FleeTool"] = flee_prob
+        # Apply stimulus-specific adjustments
+        self._adjust_probabilities_for_stimulus(probabilities, stimulus)
         
-        if "DialogueResponseTool" in probabilities:
-            # Higher extraversion means more likely to engage in dialogue
-            dialogue_prob = probabilities["DialogueResponseTool"]
-            dialogue_prob = self.personality.influence_value(
-                dialogue_prob,
-                PersonalityDimension.EXTRAVERSION,
-                influence_strength=0.3
-            )
-            # Higher agreeableness can increase dialogue probability for certain stimuli
-            if stimulus.intent in [StimulusIntent.BUILD_RAPPORT, StimulusIntent.SEEK_HELP]:
-                dialogue_prob = self.personality.influence_value(
-                    dialogue_prob,
-                    PersonalityDimension.AGREEABLENESS,
-                    influence_strength=0.3
-                )
-            # Apply the adjustment
-            probabilities["DialogueResponseTool"] = dialogue_prob
-        
-        # Apply situational adjustments for specific stimulus types
-        if stimulus.intent == StimulusIntent.HUMILIATE:
-            # Being humiliated can provoke different responses based on neuroticism
-            if "DialogueResponseTool" in probabilities and "FleeTool" in probabilities:
-                neuroticism = self.personality.get_trait(PersonalityDimension.NEUROTICISM)
-                # Higher neuroticism may lead to fleeing when humiliated
-                if neuroticism > 0.7:
-                    probabilities["FleeTool"] += 0.2
-                    probabilities["DialogueResponseTool"] -= 0.2
-                # Lower neuroticism might lead to standing ground
-                elif neuroticism < 0.3:
-                    probabilities["FleeTool"] -= 0.1
-                    probabilities["DialogueResponseTool"] += 0.1
+        # Apply personality-specific adjustments
+        self._adjust_probabilities_for_personality(probabilities, stimulus)
         
         # Add randomness for non-deterministic behavior
-        for tool in probabilities:
+        for tool in list(probabilities.keys()):
             probabilities[tool] = self.personality.add_randomness(
                 probabilities[tool], 
                 randomness=0.15
             )
+        
+        # Remove tools with negligible probability
+        probabilities = {k: v for k, v in probabilities.items() if v > 0.01}
         
         # Normalize probabilities to ensure they sum to 1.0
         total = sum(probabilities.values())
@@ -192,33 +207,426 @@ class DecisionEngine:
                 probabilities[tool] /= total
                 
         return probabilities
-
+    
+    def _calculate_category_probabilities(self, stimulus: InterpretedStimulus) -> Dict[str, float]:
+        """Determine which tool categories are most relevant for this stimulus."""
+        result = {
+            ToolCategory.DIALOGUE: 0.1,
+            ToolCategory.COMBAT: 0.1,
+            ToolCategory.MOVEMENT: 0.1,
+            ToolCategory.SOCIAL: 0.1,
+            ToolCategory.EMOTIONAL: 0.1,
+            ToolCategory.ITEM: 0.1,
+            ToolCategory.ENVIRONMENTAL: 0.1,
+        }
+        
+        # Stimulus type strongly influences category selection
+        if stimulus.stimulus_type == StimulusType.DIALOGUE:
+            result[ToolCategory.DIALOGUE] += 0.4
+            result[ToolCategory.SOCIAL] += 0.2
+            result[ToolCategory.EMOTIONAL] += 0.1
+            
+        elif stimulus.stimulus_type == StimulusType.GESTURE:
+            result[ToolCategory.MOVEMENT] += 0.2
+            result[ToolCategory.SOCIAL] += 0.2
+            result[ToolCategory.EMOTIONAL] += 0.2
+            
+        elif stimulus.stimulus_type == StimulusType.ACTION:
+            result[ToolCategory.MOVEMENT] += 0.2
+            result[ToolCategory.COMBAT] += 0.2
+            
+        elif stimulus.stimulus_type == StimulusType.ENVIRONMENT:
+            result[ToolCategory.ENVIRONMENTAL] += 0.4
+            result[ToolCategory.MOVEMENT] += 0.2
+            
+        elif stimulus.stimulus_type == StimulusType.OBJECT_INTERACTION:
+            result[ToolCategory.ITEM] += 0.4
+            result[ToolCategory.ENVIRONMENTAL] += 0.2
+            
+        elif stimulus.stimulus_type == StimulusType.PHYSICAL_CONTACT:
+            result[ToolCategory.COMBAT] += 0.3
+            result[ToolCategory.MOVEMENT] += 0.2
+            result[ToolCategory.EMOTIONAL] += 0.2
+            
+        # Stimulus schema affects category choice
+        if StimulusSchema.THREAT in stimulus.schema or StimulusSchema.VIOLENCE in stimulus.schema:
+            result[ToolCategory.COMBAT] += 0.2
+            result[ToolCategory.MOVEMENT] += 0.2
+            
+        if StimulusSchema.PRAISE in stimulus.schema or StimulusSchema.FLIRTATION in stimulus.schema:
+            result[ToolCategory.SOCIAL] += 0.3
+            result[ToolCategory.EMOTIONAL] += 0.2
+            
+        # Stimulus intent affects category choice
+        if stimulus.intent == StimulusIntent.PROVOKE or stimulus.intent == StimulusIntent.HUMILIATE:
+            result[ToolCategory.COMBAT] += 0.1
+            result[ToolCategory.EMOTIONAL] += 0.2
+            
+        if stimulus.intent == StimulusIntent.BUILD_RAPPORT or stimulus.intent == StimulusIntent.EXPRESS_LOVE:
+            result[ToolCategory.SOCIAL] += 0.3
+            result[ToolCategory.DIALOGUE] += 0.2
+            
+        # Stimulus salience affects category weighting
+        if SalienceType.EMOTIONAL in stimulus.salience and stimulus.salience[SalienceType.EMOTIONAL] > 0.7:
+            result[ToolCategory.EMOTIONAL] += 0.2
+            
+        # Normalize values
+        total = sum(result.values())
+        for category in result:
+            result[category] /= total
+            
+        return result
+    
+    def _adjust_probabilities_for_stimulus(self, probabilities: Dict[str, float], stimulus: InterpretedStimulus) -> None:
+        """Make stimulus-specific adjustments to tool probabilities."""
+        # THREAT response adjustments
+        if StimulusSchema.THREAT in stimulus.schema:
+            self._adjust_tool_probability_group(probabilities, ["FleeTool", "HideTool", "TakeCoverTool"], 0.3)
+            self._adjust_tool_probability_group(probabilities, ["DefendTool", "ThreatenTool"], 0.2)
+            
+        # VIOLENCE response adjustments
+        if StimulusSchema.VIOLENCE in stimulus.schema:
+            self._adjust_tool_probability_group(probabilities, ["FleeTool", "RetreatTool"], 0.3)
+            self._adjust_tool_probability_group(probabilities, ["AttackTool", "DefendTool"], 0.3)
+            
+        # FLIRTATION response adjustments
+        if StimulusSchema.FLIRTATION in stimulus.schema:
+            self._adjust_tool_probability_group(probabilities, ["DialogueResponseTool", "ExpressEmotionTool"], 0.3)
+            
+        # DIALOGUE response adjustments
+        if stimulus.stimulus_type == StimulusType.DIALOGUE:
+            self._adjust_tool_probability_group(probabilities, ["DialogueResponseTool", "AskQuestionTool", "MonologueTool"], 0.4)
+            
+        # Intent-specific adjustments
+        if stimulus.intent == StimulusIntent.HUMILIATE:
+            self._adjust_tool_probability_group(probabilities, ["ExpressEmotionTool", "DialogueResponseTool"], 0.2)
+            
+        elif stimulus.intent == StimulusIntent.BUILD_RAPPORT:
+            self._adjust_tool_probability_group(probabilities, ["DialogueResponseTool", "ExpressEmotionTool", "BefriendTool"], 0.3)
+            
+        elif stimulus.intent == StimulusIntent.WARN:
+            self._adjust_tool_probability_group(probabilities, ["RetreatTool", "DefendTool", "FleeTool"], 0.3)
+    
+    def _adjust_tool_probability_group(self, probabilities: Dict[str, float], tool_names: List[str], total_adjustment: float) -> None:
+        """Increase probability for a group of tools by distributing the total adjustment among available tools."""
+        # Filter to tools that are actually available
+        available_tools = [tool for tool in tool_names if tool in probabilities]
+        
+        if not available_tools:
+            return
+            
+        # Distribute adjustment evenly among available tools
+        per_tool_adjustment = total_adjustment / len(available_tools)
+        
+        for tool in available_tools:
+            probabilities[tool] += per_tool_adjustment
+    
+    def _adjust_probabilities_for_personality(self, probabilities: Dict[str, float], stimulus: InterpretedStimulus) -> None:
+        """Adjust tool probabilities based on personality traits and current modifiers."""
+        # AGGRESSIVENESS influence
+        aggressiveness = self.personality.get_trait(PersonalityDimension.AGGRESSIVENESS)
+        if aggressiveness > 0.7:  # Very aggressive
+            self._adjust_tool_probability_group(probabilities, ["AttackTool", "ThreatenTool"], 0.2)
+            self._adjust_tool_probability_group(probabilities, ["FleeTool", "HideTool", "RetreatTool"], -0.2)
+        elif aggressiveness < 0.3:  # Non-aggressive
+            self._adjust_tool_probability_group(probabilities, ["FleeTool", "HideTool", "RetreatTool"], 0.2)
+            self._adjust_tool_probability_group(probabilities, ["AttackTool", "ThreatenTool"], -0.2)
+            
+        # EXTRAVERSION influence
+        extraversion = self.personality.get_trait(PersonalityDimension.EXTRAVERSION)
+        if extraversion > 0.7:  # Very extraverted
+            self._adjust_tool_probability_group(
+                probabilities, 
+                ["DialogueResponseTool", "GreetTool", "AskQuestionTool", "MonologueTool", "BefriendTool"], 
+                0.2
+            )
+        elif extraversion < 0.3:  # Introverted
+            self._adjust_tool_probability_group(
+                probabilities,
+                ["HideTool", "SearchAreaTool", "ListenTool"],
+                0.2
+            )
+            
+        # NEUROTICISM influence
+        neuroticism = self.personality.get_trait(PersonalityDimension.NEUROTICISM)
+        if neuroticism > 0.7:  # Highly neurotic
+            self._adjust_tool_probability_group(
+                probabilities,
+                ["ExpressEmotionTool", "PanicTool", "FleeTool"],
+                0.2
+            )
+            
+        # OPENNESS influence
+        openness = self.personality.get_trait(PersonalityDimension.OPENNESS)
+        if openness > 0.7:  # Very open
+            self._adjust_tool_probability_group(
+                probabilities,
+                ["SearchAreaTool", "ExamineItemTool", "AskQuestionTool"],
+                0.15
+            )
+            
+        # CONSCIENTIOUSNESS influence
+        conscientiousness = self.personality.get_trait(PersonalityDimension.CONSCIENTIOUSNESS)
+        if conscientiousness > 0.7:  # Very conscientious
+            self._adjust_tool_probability_group(
+                probabilities,
+                ["ExamineItemTool", "CraftItemTool", "SetTrapTool"],
+                0.15
+            )
+            
+        # AGREEABLENESS influence
+        agreeableness = self.personality.get_trait(PersonalityDimension.AGREEABLENESS)
+        if agreeableness > 0.7:  # Very agreeable
+            self._adjust_tool_probability_group(
+                probabilities,
+                ["OfferHelpTool", "ApologizeTool", "BefriendTool"],
+                0.2
+            )
+            self._adjust_tool_probability_group(
+                probabilities,
+                ["ThreatenTool", "AttackTool"],
+                -0.1
+            )
+            
+        # Modifier: STRESS
+        stress = self.personality.get_modifier(PersonalityModifier.STRESS)
+        if stress > 0.7:  # High stress
+            self._adjust_tool_probability_group(
+                probabilities,
+                ["PanicTool", "FleeTool", "ExpressEmotionTool", "RetreatTool"],
+                0.3
+            )
+            
+        # Modifier: MOOD
+        mood = self.personality.get_modifier(PersonalityModifier.MOOD)
+        if mood < 0.3:  # Bad mood
+            self._adjust_tool_probability_group(
+                probabilities,
+                ["ExpressEmotionTool", "DialogueResponseTool"],
+                0.1
+            )
+        elif mood > 0.7:  # Good mood
+            self._adjust_tool_probability_group(
+                probabilities,
+                ["GreetTool", "LaughTool", "OfferHelpTool"],
+                0.1
+            )
+    
     def _build_tool_kwargs(self, tool: Tool, stimulus: InterpretedStimulus) -> Dict[str, Any]:
         """Map stimulus to tool‐specific kwargs."""
         kwargs: Dict[str, Any] = {}
+        
+        # Common kwargs that apply to many tools
+        personality_context = {
+            "aggressiveness": self.personality.get_trait(PersonalityDimension.AGGRESSIVENESS),
+            "extraversion": self.personality.get_trait(PersonalityDimension.EXTRAVERSION),
+            "neuroticism": self.personality.get_trait(PersonalityDimension.NEUROTICISM),
+            "openness": self.personality.get_trait(PersonalityDimension.OPENNESS),
+            "conscientiousness": self.personality.get_trait(PersonalityDimension.CONSCIENTIOUSNESS),
+            "agreeableness": self.personality.get_trait(PersonalityDimension.AGREEABLENESS),
+            "dominance": self.personality.get_trait(PersonalityDimension.DOMINANCE),
+            "stress": self.personality.get_modifier(PersonalityModifier.STRESS),
+            "mood": self.personality.get_modifier(PersonalityModifier.MOOD),
+            "quirks": self.personality.quirks,
+        }
 
+        # --- DIALOGUE TOOLS ---
         if tool.name == "dialogue_response":
-            # Pass the raw content for response, but modify based on personality
-            prompt = stimulus.raw_content
+            kwargs["prompt"] = stimulus.raw_content
+            kwargs["personality_context"] = personality_context
             
-            # Add personality-driven context for more nuanced responses
-            aggressiveness = self.personality.get_trait(PersonalityDimension.AGGRESSIVENESS)
-            extraversion = self.personality.get_trait(PersonalityDimension.EXTRAVERSION)
-            
-            # In a real implementation, these could be used to frame the prompt for an LLM
-            # that would generate the response with the right tone and content
-            kwargs["prompt"] = prompt
-            kwargs["personality_context"] = {
-                "aggressiveness": aggressiveness,
-                "extraversion": extraversion,
-                "quirks": self.personality.quirks,
-            }
-            
+            # Determine response tone based on personality and stimulus
+            if self.personality.get_trait(PersonalityDimension.AGGRESSIVENESS) > 0.7:
+                kwargs["tone"] = "hostile"
+            elif self.personality.get_trait(PersonalityDimension.AGREEABLENESS) > 0.7:
+                kwargs["tone"] = "friendly"
+            elif self.personality.get_trait(PersonalityDimension.CONSCIENTIOUSNESS) > 0.7:
+                kwargs["tone"] = "formal"
+            elif self.personality.get_modifier(PersonalityModifier.STRESS) > 0.7:
+                kwargs["tone"] = "defensive"
+            elif self.personality.get_trait(PersonalityDimension.EXTRAVERSION) < 0.3:
+                kwargs["tone"] = "neutral"
+            else:
+                kwargs["tone"] = "casual"
+                
+        elif tool.name == "ask_question":
+            kwargs["topic"] = stimulus.raw_content or "the situation"
+            # Determine question type based on personality
+            if self.personality.get_trait(PersonalityDimension.OPENNESS) > 0.7:
+                kwargs["question_type"] = "open"
+            elif self.personality.get_trait(PersonalityDimension.DOMINANCE) > 0.7:
+                kwargs["question_type"] = "leading"
+            elif self.personality.get_trait(PersonalityDimension.NEUROTICISM) > 0.7:
+                kwargs["question_type"] = "closed"
+            else:
+                kwargs["question_type"] = "open"
+                
+        elif tool.name == "monologue":
+            kwargs["topic"] = stimulus.raw_content or "the situation"
+            # Determine monologue style based on personality
+            if self.personality.get_trait(PersonalityDimension.EXTRAVERSION) > 0.7:
+                kwargs["style"] = "dramatic"
+            elif self.personality.get_trait(PersonalityDimension.OPENNESS) > 0.7:
+                kwargs["style"] = "philosophical"
+            elif self.personality.get_trait(PersonalityDimension.CONSCIENTIOUSNESS) < 0.3:
+                kwargs["style"] = "rambling"
+            else:
+                kwargs["style"] = "neutral"
+                
+            # Length based on extraversion
+            if self.personality.get_trait(PersonalityDimension.EXTRAVERSION) > 0.7:
+                kwargs["length"] = "extended"
+            elif self.personality.get_trait(PersonalityDimension.EXTRAVERSION) < 0.3:
+                kwargs["length"] = "brief"
+            else:
+                kwargs["length"] = "medium"
+
+        # --- MOVEMENT TOOLS ---
         elif tool.name == "flee":
-            # FleeTool might take parameters like escape route preference
-            risk_tolerance = self.personality.get_trait(PersonalityDimension.RISK_TOLERANCE)
-            kwargs["caution_level"] = 1.0 - risk_tolerance  # Higher risk tolerance = lower caution
+            kwargs["caution_level"] = 1.0 - self.personality.get_trait(PersonalityDimension.RISK_TOLERANCE)
             
+            # Speed based on stress and aggressiveness
+            stress = self.personality.get_modifier(PersonalityModifier.STRESS)
+            if stress > 0.7:
+                kwargs["speed"] = "panicked"
+            elif self.personality.get_trait(PersonalityDimension.AGGRESSIVENESS) < 0.3:
+                kwargs["speed"] = "fast"
+            elif self.personality.get_trait(PersonalityDimension.AGGRESSIVENESS) > 0.7:
+                kwargs["speed"] = "slow"  # Aggressive types tend to be more reluctant to flee
+            else:
+                kwargs["speed"] = "moderate"
+                
+        elif tool.name == "approach":
+            # Manner of approach based on personality
+            if self.personality.get_trait(PersonalityDimension.AGGRESSIVENESS) > 0.7:
+                kwargs["manner"] = "aggressive"
+            elif self.personality.get_trait(PersonalityDimension.AGREEABLENESS) > 0.7:
+                kwargs["manner"] = "friendly"
+            elif self.personality.get_trait(PersonalityDimension.OPENNESS) < 0.3:
+                kwargs["manner"] = "cautious"
+            elif self.personality.get_trait(PersonalityDimension.DOMINANCE) < 0.3:
+                kwargs["manner"] = "stealthy"
+            else:
+                kwargs["manner"] = "neutral"
+                
+        elif tool.name == "hide" or tool.name == "take_cover":
+            # No specific personality adjustments needed for these basic actions
+            pass
+            
+        # --- COMBAT TOOLS ---
+        elif tool.name == "attack":
+            # Attack strength based on aggressiveness and stress
+            aggression = self.personality.get_trait(PersonalityDimension.AGGRESSIVENESS)
+            stress = self.personality.get_modifier(PersonalityModifier.STRESS)
+            kwargs["strength"] = min(1.0, (aggression * 0.7) + (stress * 0.3))
+            
+        elif tool.name == "defend":
+            # Defense style based on personality
+            if self.personality.get_trait(PersonalityDimension.AGGRESSIVENESS) > 0.7:
+                kwargs["style"] = "aggressive"
+            elif self.personality.get_trait(PersonalityDimension.RISK_TOLERANCE) > 0.5:
+                kwargs["style"] = "balanced"
+            else:
+                kwargs["style"] = "cautious"
+                
+        elif tool.name == "threaten":
+            # Threat intensity based on aggressiveness and dominance
+            aggression = self.personality.get_trait(PersonalityDimension.AGGRESSIVENESS)
+            dominance = self.personality.get_trait(PersonalityDimension.DOMINANCE)
+            kwargs["intensity"] = min(1.0, (aggression * 0.6) + (dominance * 0.4))
+            
+            # Threat type based on personality
+            if self.personality.get_trait(PersonalityDimension.DOMINANCE) > 0.7:
+                kwargs["threat_type"] = "display_weapon"
+            elif self.personality.get_trait(PersonalityDimension.EXTRAVERSION) > 0.7:
+                kwargs["threat_type"] = "verbal"
+            else:
+                kwargs["threat_type"] = "physical"
+                
+        # --- EMOTIONAL TOOLS ---
+        elif tool.name == "express_emotion":
+            mood = self.personality.get_modifier(PersonalityModifier.MOOD)
+            stress = self.personality.get_modifier(PersonalityModifier.STRESS)
+            
+            # Determine emotion to express based on mood and stimulus
+            if StimulusSchema.THREAT in stimulus.schema or StimulusSchema.VIOLENCE in stimulus.schema:
+                kwargs["emotion"] = "fear" if self.personality.get_trait(PersonalityDimension.NEUROTICISM) > 0.5 else "anger"
+            elif StimulusSchema.INSULT in stimulus.schema:
+                kwargs["emotion"] = "anger" if self.personality.get_trait(PersonalityDimension.NEUROTICISM) > 0.5 else "disgust"
+            elif StimulusSchema.PRAISE in stimulus.schema:
+                kwargs["emotion"] = "joy"
+            elif mood < 0.3:
+                kwargs["emotion"] = "sadness"
+            elif mood > 0.7:
+                kwargs["emotion"] = "joy"
+            elif stress > 0.7:
+                kwargs["emotion"] = "fear"
+            else:
+                kwargs["emotion"] = "neutral"
+                
+            # Intensity based on neuroticism and extraversion
+            neuroticism = self.personality.get_trait(PersonalityDimension.NEUROTICISM)
+            extraversion = self.personality.get_trait(PersonalityDimension.EXTRAVERSION)
+            kwargs["intensity"] = min(1.0, (neuroticism * 0.5) + (extraversion * 0.3) + (stress * 0.2))
+            
+        elif tool.name == "laugh":
+            # Laugh type based on personality and stimulus
+            if self.personality.get_trait(PersonalityDimension.NEUROTICISM) > 0.7:
+                kwargs["laugh_type"] = "nervous"
+            elif self.personality.get_trait(PersonalityDimension.AGREEABLENESS) < 0.3 and (
+                StimulusSchema.INSULT in stimulus.schema or stimulus.intent == StimulusIntent.HUMILIATE):
+                kwargs["laugh_type"] = "mocking"
+            elif self.personality.get_trait(PersonalityDimension.AGREEABLENESS) > 0.7:
+                kwargs["laugh_type"] = "polite"
+            else:
+                kwargs["laugh_type"] = "genuine"
+                
+        elif tool.name == "cry":
+            # Cry type based on stimulus and personality
+            if StimulusSchema.VIOLENCE in stimulus.schema:
+                kwargs["cry_type"] = "fear"
+            elif stimulus.intent == StimulusIntent.HUMILIATE:
+                kwargs["cry_type"] = "anger" if self.personality.get_trait(PersonalityDimension.AGGRESSIVENESS) > 0.5 else "sadness"
+            else:
+                kwargs["cry_type"] = "sadness"
+                
+            # Intensity based on neuroticism
+            kwargs["intensity"] = min(1.0, self.personality.get_trait(PersonalityDimension.NEUROTICISM) * 0.8)
+            
+        elif tool.name == "panic":
+            # How well controlled is the panic based on neuroticism and conscientiousness
+            neuroticism = self.personality.get_trait(PersonalityDimension.NEUROTICISM)
+            conscientiousness = self.personality.get_trait(PersonalityDimension.CONSCIENTIOUSNESS)
+            kwargs["containment"] = max(0.0, (conscientiousness * 0.7) - (neuroticism * 0.3))
+            
+        # --- SOCIAL TOOLS ---
+        elif tool.name == "greet":
+            # Formality based on personality
+            if self.personality.get_trait(PersonalityDimension.CONSCIENTIOUSNESS) > 0.7:
+                kwargs["formality"] = "formal"
+            elif self.personality.get_trait(PersonalityDimension.EXTRAVERSION) > 0.7:
+                kwargs["formality"] = "warm"
+            elif self.personality.get_trait(PersonalityDimension.AGREEABLENESS) < 0.3:
+                kwargs["formality"] = "cold"
+            elif self.personality.get_trait(PersonalityDimension.EXTRAVERSION) < 0.3:
+                kwargs["formality"] = "neutral"
+            else:
+                kwargs["formality"] = "casual"
+                
+        elif tool.name == "befriend":
+            # Approach based on personality
+            if self.personality.get_trait(PersonalityDimension.AGREEABLENESS) > 0.7:
+                kwargs["approach"] = "genuine"
+            elif self.personality.get_trait(PersonalityDimension.EXTRAVERSION) > 0.7:
+                kwargs["approach"] = "enthusiastic"
+            elif self.personality.get_trait(PersonalityDimension.OPENNESS) < 0.3:
+                kwargs["approach"] = "cautious"
+            elif self.personality.get_trait(PersonalityDimension.AGREEABLENESS) < 0.3:
+                kwargs["approach"] = "manipulative"
+            else:
+                kwargs["approach"] = "genuine"
+                
+        # Default - for any tool not specifically handled, just pass the empty kwargs dict
         return kwargs
 
     # ------------------------------------------------------------------
@@ -226,13 +634,13 @@ class DecisionEngine:
     # ------------------------------------------------------------------
     def _mock_llm_select(self, stimulus: InterpretedStimulus) -> str:
         """Pretend we queried an LLM; returns tool name string."""
-        # Create "mock" tool probabilities
-        available_tools = ["DialogueResponseTool", "FleeTool"]
-        tool_probs = self._calculate_tool_probabilities(
-            stimulus, 
-            {tool: None for tool in available_tools}  # Type doesn't matter for mock
-        )
+        # Get probabilities for all tools
+        tool_probs = self._calculate_tool_probabilities(stimulus)
         
         # Get the most likely tool
-        highest_prob_tool = max(tool_probs.items(), key=lambda x: x[1])[0]
-        return highest_prob_tool 
+        if tool_probs:
+            highest_prob_tool = max(tool_probs.items(), key=lambda x: x[1])[0]
+            return highest_prob_tool
+        
+        # Fallback to DialogueResponseTool if no other good choices
+        return "DialogueResponseTool" 

@@ -24,6 +24,12 @@ def get_tool(tool_name: str) -> Type[Tool]:
 # Import tool modules AFTER helpers are defined to avoid circular import
 # ---------------------------------------------------------------------
 from . import dialogue_tools  # noqa: E402  # pylint: disable=wrong-import-position
+from . import combat_tools  # noqa: E402  # pylint: disable=wrong-import-position
+from . import movement_tools  # noqa: E402  # pylint: disable=wrong-import-position
+from . import social_tools  # noqa: E402  # pylint: disable=wrong-import-position
+from . import emotional_tools  # noqa: E402  # pylint: disable=wrong-import-position
+from . import item_tools  # noqa: E402  # pylint: disable=wrong-import-position
+from . import environmental_tools  # noqa: E402  # pylint: disable=wrong-import-position
 
 __all__ = [
     "Tool",
