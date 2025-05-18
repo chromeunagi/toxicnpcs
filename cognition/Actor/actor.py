@@ -6,10 +6,7 @@ from cognition.StimulusEngine.types import (
     InterpretedStimulus,
     InterpretationModifier,
 )
-
-# We'll use a string for personality_type for now.
-# If a specific PersonalityProfile type is defined later (e.g., in PersonalityEngine),
-# this can be updated.
+from cognition.MemoryEngine.types import MemoryItem
 
 
 class Actor:
@@ -44,10 +41,8 @@ class Actor:
         # This could serve as a short-term sensory memory.
         self.interpreted_stimuli_history: List[InterpretedStimulus] = []
 
-        # List of InterpretedStimulus objects that have been committed to long-term memory.
-        # These might be consolidated, abstracted, or tagged for easier retrieval.
-        # For now, they are just copies of InterpretedStimulus.
-        self.memorized_items: List[InterpretedStimulus] = []
+        # List of MemoryItem objects that have been committed to long-term memory.
+        self.memorized_items: List[MemoryItem] = []
 
     def add_raw_stimulus(self, stimulus: RawStimulus):
         """Adds a raw stimulus to the unprocessed queue."""
@@ -63,14 +58,13 @@ class Actor:
         """Adds an interpreted stimulus to the history."""
         self.interpreted_stimuli_history.append(stimulus)
 
-    def add_to_memory(self, interpreted_stimulus: InterpretedStimulus):
+    def add_to_memory(self, item: InterpretedStimulus | str):
         """
-        Adds an interpreted stimulus to the list of memorized items.
-        This is a simplified representation of memory formation.
-        Future enhancements could involve consolidation, abstraction, or linking to
-        a more complex MemoryEngine.
+        Creates a MemoryItem from an InterpretedStimulus or string and adds it to
+        the list of memorized items.
         """
-        self.memorized_items.append(interpreted_stimulus)
+        memory_item = MemoryItem(content=item)
+        self.memorized_items.append(memory_item)
 
     def __repr__(self) -> str:
         modifier_types = [type(m).__name__ for m in self.interpretation_modifiers]
