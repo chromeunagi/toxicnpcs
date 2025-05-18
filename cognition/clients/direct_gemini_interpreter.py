@@ -1,8 +1,8 @@
-from google import genai # type: ignore
+from google import genai
 from typing import Sequence
 import json
 
-from cognition.types import (
+from cognition.StimulusProcessEngine.types import (
     RawStimulus, 
     InterpretedStimulus, 
     InterpretationModifier,
@@ -181,7 +181,7 @@ def _parse_gemini_response(response_text: str, stimulus_in_progress: Interpreted
 
 # Example usage
 if __name__ == "__main__":
-    from .types import (
+    from ..StimulusProcessEngine.types import (
         RawStimulusChannel,
         PersonalityInterpretationModifier,
         MemoryInterpretationModifier
