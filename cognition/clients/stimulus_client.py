@@ -217,9 +217,9 @@ class StimulusClient:
 
     def __enter__(self):
         """Enter the runtime context related to this object."""
-        # If BaseClient had significant __enter__ logic, we might call it here:
-        # if hasattr(self.base_client, '__enter__'):
-        #     self.base_client.__enter__()
+        # Delegate context handling to the underlying base_client when possible
+        if hasattr(self.base_client, "__enter__"):
+            self.base_client.__enter__()
         return self
 
     def __exit__(
@@ -231,7 +231,10 @@ class StimulusClient:
         ],  # TracebackType is more specific, but Any is simpler here
     ):
         """Exit the runtime context related to this object."""
-        # If BaseClient had significant __exit__ logic, we might call it here:
-        # if hasattr(self.base_client, '__exit__'):
-        #     self.base_client.__exit__(exc_type, exc_val, exc_tb)
-        pass
+        # Ensure the wrapped BaseClient cleans up its resources
+        if hasattr(self.base_client, "__exit__"):
+            self.base_client.__exit__(exc_type, exc_val, exc_tb)
+        elif hasattr(self.base_client, "close"):
+            self.base_client.close()
+        # Returning False propagates exceptions, matching default context manager behaviour
+        return False

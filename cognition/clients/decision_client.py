@@ -166,6 +166,8 @@ class DecisionClient:
 
     def __enter__(self):
         """Enter the runtime context related to this object."""
+        if hasattr(self.base_client, "__enter__"):
+            self.base_client.__enter__()
         return self
 
     def __exit__(
@@ -175,7 +177,11 @@ class DecisionClient:
         exc_tb: Optional[Any],  # Using Any for traceback type for simplicity
     ):
         """Exit the runtime context related to this object."""
-        pass
+        if hasattr(self.base_client, "__exit__"):
+            self.base_client.__exit__(exc_type, exc_val, exc_tb)
+        elif hasattr(self.base_client, "close"):
+            self.base_client.close()
+        return False
 
 
 # Example placeholder for Action type (would likely be in DecisionEngine.types)
