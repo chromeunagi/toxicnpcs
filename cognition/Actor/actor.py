@@ -58,12 +58,17 @@ class Actor:
         """Adds an interpreted stimulus to the history."""
         self.interpreted_stimuli_history.append(stimulus)
 
-    def add_to_memory(self, item: str):
+    def add_to_memory(self, item: MemoryItem | InterpretedStimulus | str):
         """
         Creates a MemoryItem from an InterpretedStimulus or string and adds it to
         the list of memorized items.
         """
-        memory_item = MemoryItem(content=item)
+        # If the caller already passed a MemoryItem we can store it directly;
+        # otherwise wrap the provided object so memory entries remain uniform.
+        if isinstance(item, MemoryItem):
+            memory_item = item
+        else:
+            memory_item = MemoryItem(content=item)
         self.memorized_items.append(memory_item)
 
     def __repr__(self) -> str:
